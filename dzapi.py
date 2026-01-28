@@ -3,7 +3,7 @@ from time import time
 from math import ceil
 from Cryptodome.Hash import MD5
 from Cryptodome.Cipher import Blowfish
-from tqdm import tqdm
+from utils.utils import tqdm
 from utils.utils import create_requests_session
 
 class APIError(Exception):
@@ -130,6 +130,45 @@ class DeezerAPI:
             'EXPLICIT_LYRICS': str(int(resp['explicit_lyrics'])),
             'ALB_TITLE': resp['album']['title']
         }
+
+    def get_track_preview_url(self, track_id):
+        """Get the 30-second preview URL for a track from the public Deezer API."""
+        try:
+            resp = self.s.get(f'https://api.deezer.com/track/{track_id}').json()
+            if 'error' not in resp and 'preview' in resp:
+                return resp.get('preview')
+        except Exception:
+            pass
+        return None
+    
+    def get_tracks_public_data(self, track_ids):
+        """Get public API data for multiple tracks (preview URLs, etc.) using parallel requests."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        results = {}
+        
+        def fetch_track(track_id):
+            try:
+                resp = self.s.get(f'https://api.deezer.com/track/{track_id}').json()
+                if 'error' not in resp:
+                    return str(track_id), {
+                        'preview': resp.get('preview'),
+                        'album_cover_small': resp.get('album', {}).get('cover_small'),
+                        'album_cover_medium': resp.get('album', {}).get('cover_medium')
+                    }
+            except Exception:
+                pass
+            return None
+        
+        # Parallel requests - max 10 concurrent to avoid rate limiting
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(fetch_track, tid) for tid in track_ids]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    results[result[0]] = result[1]
+        
+        return results
 
     def get_album(self, id):
         try:

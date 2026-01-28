@@ -36,13 +36,18 @@ class ModuleInterface:
         if self.default_cover.file_type is ImageFileTypeEnum.webp:
             self.default_cover.file_type = ImageFileTypeEnum.jpg
 
-        self.session = DeezerAPI(self.exception, self.settings['client_id'], self.settings['client_secret'], self.settings['bf_secret'])
+        self.session = DeezerAPI(
+            self.exception,
+            self.settings.get('client_id', '447462'),
+            self.settings.get('client_secret', 'a83bf7f38ad2f137e444727cfc3775cf'),
+            self.settings.get('bf_secret', '')
+        )
         arl = module_controller.temporary_settings_controller.read('arl')
         if arl:
             try:
                 self.session.login_via_arl(arl)
             except self.exception:
-                self.login(self.settings['email'], self.settings['password'])
+                self.login(self.settings.get('email', ''), self.settings.get('password', ''))
 
         self.quality_parse = {
             QualityEnum.MINIMUM: 'MP3_128',
@@ -319,35 +324,83 @@ class ModuleInterface:
             results = self.session.search(query, query_type.name, 0, limit)['data']
 
         if query_type is DownloadTypeEnum.track:
-            return [SearchResult(
+            search_results = []
+            
+            # Fetch preview URLs from public API for all tracks at once
+            track_ids = [i['SNG_ID'] for i in results]
+            public_data = self.session.get_tracks_public_data(track_ids)
+            
+            for i in results:
+                track_id = str(i['SNG_ID'])
+                
+                # Get preview URL from public API data
+                preview_url = None
+                if track_id in public_data:
+                    preview_url = public_data[track_id].get('preview')
+                
+                # Get cover image URL (small thumbnail for search results)
+                cover_url = None
+                if i.get('ALB_PICTURE'):
+                    cover_url = self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                # Fallback to public API cover if internal API doesn't have it
+                elif track_id in public_data and public_data[track_id].get('album_cover_small'):
+                    cover_url = public_data[track_id].get('album_cover_small')
+                
+                search_results.append(SearchResult(
                     result_id = i['SNG_ID'],
                     name = i['SNG_TITLE'] if not i.get('VERSION') else f'{i["SNG_TITLE"]} {i["VERSION"]}',
                     artists = [a['ART_NAME'] for a in i['ARTISTS']],
                     explicit = i['EXPLICIT_LYRICS'] == '1',
+                    duration = int(i['DURATION']) if i.get('DURATION') else None,
+                    image_url = cover_url,
+                    preview_url = preview_url,
                     additional = [i["ALB_TITLE"]]
-                ) for i in results]
+                ))
+            return search_results
         elif query_type is DownloadTypeEnum.album:
-            return [SearchResult(
+            search_results = []
+            for i in results:
+                cover_url = None
+                if i.get('ALB_PICTURE'):
+                    cover_url = self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                search_results.append(SearchResult(
                     result_id = i['ALB_ID'],
                     name = i['ALB_TITLE'],
                     artists = [a['ART_NAME'] for a in i['ARTISTS']],
                     year = i['PHYSICAL_RELEASE_DATE'].split('-')[0],
                     explicit = i['EXPLICIT_ALBUM_CONTENT']['EXPLICIT_LYRICS_STATUS'] in (1, 4),
+                    image_url = cover_url,
                     additional = [i["NUMBER_TRACK"]]
-                ) for i in results]
+                ))
+            return search_results
         elif query_type is DownloadTypeEnum.artist:
-            return [SearchResult(
+            search_results = []
+            for i in results:
+                # Artist picture
+                cover_url = None
+                if i.get('ART_PICTURE'):
+                    cover_url = self.get_image_url(i['ART_PICTURE'], ImageType.artist, ImageFileTypeEnum.jpg, 56, 80)
+                search_results.append(SearchResult(
                     result_id = i['ART_ID'],
                     name = i['ART_NAME'],
+                    image_url = cover_url,
                     extra_kwargs = {'artist_name': i['ART_NAME']}
-                ) for i in results]
+                ))
+            return search_results
         elif query_type is DownloadTypeEnum.playlist:
-            return [SearchResult(
+            search_results = []
+            for i in results:
+                cover_url = None
+                if i.get('PLAYLIST_PICTURE'):
+                    cover_url = self.get_image_url(i['PLAYLIST_PICTURE'], ImageType.playlist, ImageFileTypeEnum.jpg, 56, 80)
+                search_results.append(SearchResult(
                     result_id = i['PLAYLIST_ID'],
                     name = i['TITLE'],
                     artists = [i['PARENT_USERNAME']],
+                    image_url = cover_url,
                     additional = [i["NB_SONG"]]
-                ) for i in results]
+                ))
+            return search_results
 
     def get_image_url(self, md5, img_type: ImageType, file_type: ImageFileTypeEnum, res, compression):
         if res > 3000:
