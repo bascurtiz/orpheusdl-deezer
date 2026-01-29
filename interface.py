@@ -317,6 +317,13 @@ class ModuleInterface:
         return LyricsInfo(embedded=lyrics['LYRICS_TEXT'], synced=synced_text)
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 10):
+        # Require valid session or credentials so we always show a clear message instead of VALID_TOKEN_REQUIRED on repeat searches
+        if not getattr(self.session, 'api_token', None):
+            email = self.settings.get('email', '')
+            password = self.settings.get('password', '')
+            if not email or not password:
+                raise self.exception('Deezer credentials are required. Please fill in your email and password in the settings.')
+
         results = {}
         if track_info and track_info.tags.isrc:
             results = [self.session.get_track_data_by_isrc(track_info.tags.isrc)]
