@@ -82,11 +82,15 @@ class DeezerAPI:
             'hash': MD5.new((self.client_id + email + password + self.client_secret).encode()).hexdigest(),
         }
 
+        # Check if credentials are provided
+        if not email or not password:
+            raise self.exception('Deezer credentials are required. Please fill in your email and password in the settings.')
+        
         # server sends set-cookie header with account sid
         json = self.s.get('https://connect.deezer.com/oauth/user_auth.php', params=params).json()
 
         if 'error' in json:
-            raise self.exception('Error while getting access token, check your credentials')
+            raise self.exception('Deezer authentication failed. Please check your email and password in the settings.')
 
         arl = self._api_call('user.getArl')
 
