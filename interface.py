@@ -10,7 +10,7 @@ from .dzapi import DeezerAPI
 module_information = ModuleInformation(
     service_name = 'Deezer',
     module_supported_modes = ModuleModes.download | ModuleModes.lyrics | ModuleModes.covers | ModuleModes.credits,
-    global_settings = {'client_id': '447462', 'client_secret': 'a83bf7f38ad2f137e444727cfc3775cf', 'bf_secret': ''},
+    global_settings = {'client_id': '447462', 'client_secret': 'a83bf7f38ad2f137e444727cfc3775cf', 'bf_secret': 'g4el58wc0zvf9na1'},
     session_settings = {'email': '', 'password': ''},
     session_storage_variables = ['arl'],
     netlocation_constant = ['deezer', 'dzr'],
