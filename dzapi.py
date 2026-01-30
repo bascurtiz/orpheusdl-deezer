@@ -84,13 +84,19 @@ class DeezerAPI:
 
         # Check if credentials are provided
         if not email or not password:
-            raise self.exception('Deezer credentials are required. Please fill in your email and password in the settings.')
+            raise self.exception(
+                'Deezer credentials are required. Please fill in your email and password in the settings. '
+                'Alternatively, you can use ARL instead.'
+            )
         
         # server sends set-cookie header with account sid
         json = self.s.get('https://connect.deezer.com/oauth/user_auth.php', params=params).json()
 
         if 'error' in json:
-            raise self.exception('Deezer authentication failed. Please check your email and password in the settings.')
+            raise self.exception(
+                'Deezer authentication failed. Please check your email and password in the settings. '
+                'Alternatively, you can use ARL instead.'
+            )
 
         arl = self._api_call('user.getArl')
 

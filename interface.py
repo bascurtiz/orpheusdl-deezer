@@ -11,7 +11,7 @@ module_information = ModuleInformation(
     service_name = 'Deezer',
     module_supported_modes = ModuleModes.download | ModuleModes.lyrics | ModuleModes.covers | ModuleModes.credits,
     global_settings = {'client_id': '447462', 'client_secret': 'a83bf7f38ad2f137e444727cfc3775cf', 'bf_secret': 'g4el58wc0zvf9na1'},
-    session_settings = {'email': '', 'password': ''},
+    session_settings = {'email': '', 'password': '', 'arl': ''},
     session_storage_variables = ['arl'],
     netlocation_constant = ['deezer', 'dzr'],
     url_decoding = ManualEnum.manual,
@@ -42,12 +42,18 @@ class ModuleInterface:
             self.settings.get('client_secret', 'a83bf7f38ad2f137e444727cfc3775cf'),
             self.settings.get('bf_secret', '')
         )
-        arl = module_controller.temporary_settings_controller.read('arl')
+        arl = module_controller.temporary_settings_controller.read('arl') or (self.settings.get('arl') or '').strip()
         if arl:
             try:
                 self.session.login_via_arl(arl)
+                self.tsc.set('arl', arl)
             except self.exception:
-                self.login(self.settings.get('email', ''), self.settings.get('password', ''))
+                em = (self.settings.get('email') or '').strip()
+                pw = (self.settings.get('password') or '').strip()
+                if em and pw:
+                    self.login(em, pw)
+                else:
+                    raise
 
         self.quality_parse = {
             QualityEnum.MINIMUM: 'MP3_128',
@@ -66,6 +72,17 @@ class ModuleInterface:
             self.check_sub()
 
     def login(self, email: str, password: str):
+        arl_from_settings = (self.settings.get('arl') or '').strip()
+        if arl_from_settings:
+            self.session.login_via_arl(arl_from_settings)
+            self.tsc.set('arl', arl_from_settings)
+            self.check_sub()
+            return True
+        if not (email and password):
+            raise self.exception(
+                'Deezer credentials are required. Please fill in your email and password in the settings. '
+                'Alternatively, you can use ARL instead.'
+            )
         arl, _ = self.session.login_via_email(email, password)
         self.tsc.set('arl', arl)
         self.check_sub()
@@ -319,10 +336,17 @@ class ModuleInterface:
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 10):
         # Require valid session or credentials so we always show a clear message instead of VALID_TOKEN_REQUIRED on repeat searches
         if not getattr(self.session, 'api_token', None):
-            email = self.settings.get('email', '')
-            password = self.settings.get('password', '')
-            if not email or not password:
-                raise self.exception('Deezer credentials are required. Please fill in your email and password in the settings.')
+            email = (self.settings.get('email') or '').strip()
+            password = (self.settings.get('password') or '').strip()
+            arl = (self.settings.get('arl') or '').strip()
+            has_email_pass = email and password
+            has_arl = bool(arl)
+            if not has_email_pass and not has_arl:
+                raise self.exception(
+                    'Deezer credentials are required. Please fill in your email and password in the settings. '
+                    'Alternatively, you can use ARL instead.'
+                )
+            self.login(email, password)
 
         results = {}
         if track_info and track_info.tags.isrc:
