@@ -283,10 +283,33 @@ class ModuleInterface:
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, artist_name = None) -> ArtistInfo:
         name = artist_name if artist_name else self.session.get_artist_name(artist_id)
-
+        discography = self.session.get_artist_discography(artist_id, 0, -1, get_credited_albums)
+        albums_out = []
+        for a in discography:
+            if not isinstance(a, dict):
+                albums_out.append(str(a) if a is not None else '')
+                continue
+            data = a.get('DATA', a)
+            title = data.get('ALB_TITLE') if isinstance(data, dict) else None
+            if title is not None:
+                release_date = (data.get('ORIGINAL_RELEASE_DATE') or data.get('PHYSICAL_RELEASE_DATE') or '') if isinstance(data, dict) else ''
+                release_year = release_date.split('-')[0] if release_date else None
+                cover_url = ''
+                pic = data.get('ALB_PICTURE') if isinstance(data, dict) else None
+                if pic:
+                    cover_url = self.get_image_url(pic, ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                albums_out.append({
+                    'id': data.get('ALB_ID', a.get('ALB_ID', '')),
+                    'name': title,
+                    'artist': data.get('ART_NAME', name) if isinstance(data, dict) else name,
+                    'release_year': release_year,
+                    'cover_url': cover_url,
+                })
+            else:
+                albums_out.append(data.get('ALB_ID', a.get('ALB_ID', a)) if isinstance(data, dict) else a.get('ALB_ID', a))
         return ArtistInfo(
             name = name,
-            albums = self.session.get_artist_album_ids(artist_id, 0, -1, get_credited_albums),
+            albums = albums_out if albums_out else self.session.get_artist_album_ids(artist_id, 0, -1, get_credited_albums),
         )
 
     def get_track_credits(self, track_id: str, data={}):

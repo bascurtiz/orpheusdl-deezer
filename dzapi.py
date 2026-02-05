@@ -211,6 +211,20 @@ class DeezerAPI:
         resp = self._api_call('album.getDiscography', payload)
         return [a['ALB_ID'] for a in resp['data']]
 
+    def get_artist_discography(self, id, start, nb, credited_albums):
+        """Get artist discography with album details (title, year, cover, artist) for GUI display."""
+        payload = {
+            'art_id': id,
+            'start': start,
+            'nb': nb,
+            'filter_role_id': [0,5] if credited_albums else [0],
+            'nb_songs': 0,
+            'discography_mode': 'all' if credited_albums else None,
+            'array_default': ['ALB_ID', 'ALB_TITLE', 'ART_NAME', 'PHYSICAL_RELEASE_DATE', 'ORIGINAL_RELEASE_DATE', 'ALB_PICTURE'],
+        }
+        resp = self._api_call('album.getDiscography', payload)
+        return resp.get('data') or []
+
     def get_track_url(self, id, track_token, track_token_expiry, format):
         # renews license token
         if time() - self.renew_timestamp >= 3600:
