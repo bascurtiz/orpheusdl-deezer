@@ -187,6 +187,12 @@ class ModuleInterface:
             'format': format,
         }
 
+        duration_sec = None
+        if t_data.get('DURATION') is not None:
+            try:
+                duration_sec = int(t_data['DURATION'])
+            except (TypeError, ValueError):
+                pass
         return TrackInfo(
             name = t_data['SNG_TITLE'] if not t_data.get('VERSION') else f'{t_data["SNG_TITLE"]} {t_data["VERSION"]}',
             album_id = t_data['ALB_ID'],
@@ -196,6 +202,7 @@ class ModuleInterface:
             codec = codec,
             cover_url = self.get_image_url(t_data['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
             release_year = int(tags.release_date.split('-')[0]) if tags.release_date else None,
+            duration = duration_sec,
             explicit = t_data['EXPLICIT_LYRICS'] == '1' if 'EXPLICIT_LYRICS' in t_data else None,
             artist_id = t_data['ART_ID'],
             bit_depth = 16,
@@ -244,6 +251,7 @@ class ModuleInterface:
             'release_date': a_data.get('ORIGINAL_RELEASE_DATE') or a_data['PHYSICAL_RELEASE_DATE']
         }
 
+        # Deezer album SONGS have reduced schema (no TRACK_TOKEN, etc.); get_track_info needs full pageTrack data, so do not pass track data here
         return AlbumInfo(
             name = a_data['ALB_TITLE'],
             artist = a_data['ART_NAME'],
@@ -260,22 +268,33 @@ class ModuleInterface:
     def get_playlist_info(self, playlist_id: str, data={}) -> PlaylistInfo:
         playlist = data[playlist_id] if playlist_id in data else self.session.get_playlist(playlist_id, -1, 0)
         p_data = playlist['DATA']
+        songs = playlist.get('SONGS', {}).get('data') or []
+
+        # Prefer public API for cover: it returns the proper 2x2 composite; internal pagePlaylist often returns a placeholder.
+        cover_url = self.session.get_playlist_cover_public(playlist_id)
+        p_pic = (p_data.get('PLAYLIST_PICTURE') or '').strip()
+        if not cover_url and p_pic:
+            cover_type = self.default_cover.file_type if p_pic else ImageFileTypeEnum.jpg
+            cover_url = self.get_image_url(p_pic, ImageType.playlist, cover_type, self.default_cover.resolution, self.compression_nums[self.default_cover.compression])
+        if not cover_url and songs and isinstance(songs[0], dict) and songs[0].get('ALB_PICTURE'):
+            cover_url = self.get_image_url(songs[0]['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, self.default_cover.resolution, self.compression_nums[self.default_cover.compression])
 
         # placeholder images can't be requested as pngs
-        cover_type = self.default_cover.file_type if p_data['PLAYLIST_PICTURE'] != '' else ImageFileTypeEnum.jpg
+        cover_type = self.default_cover.file_type if p_pic else ImageFileTypeEnum.jpg
 
+        # Only user-uploaded tracks (SNG_ID < 0) go in data; they can't be fetched via pageTrack. Normal tracks need full pageTrack data from API.
         user_upped_dict = {}
-        for t in playlist['SONGS']['data']:
+        for t in songs:
             if int(t['SNG_ID']) < 0:
                 user_upped_dict[t['SNG_ID']] = t
 
         return PlaylistInfo(
             name = p_data['TITLE'],
             creator = p_data['PARENT_USERNAME'],
-            tracks = [t['SNG_ID'] for t in playlist['SONGS']['data']],
+            tracks = [t['SNG_ID'] for t in songs],
             release_year = p_data['DATE_ADD'].split('-')[0],
             creator_id = p_data['PARENT_USER_ID'],
-            cover_url = self.get_image_url(p_data['PLAYLIST_PICTURE'], ImageType.playlist, cover_type, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
+            cover_url = cover_url,
             cover_type = cover_type,
             description = p_data['DESCRIPTION'],
             track_extra_kwargs = {'data': user_upped_dict}
@@ -424,7 +443,7 @@ class ModuleInterface:
                     year = i['PHYSICAL_RELEASE_DATE'].split('-')[0],
                     explicit = i['EXPLICIT_ALBUM_CONTENT']['EXPLICIT_LYRICS_STATUS'] in (1, 4),
                     image_url = cover_url,
-                    additional = [i["NUMBER_TRACK"]]
+                    additional = [f"1 track" if i['NUMBER_TRACK'] == 1 else f"{i['NUMBER_TRACK']} tracks"]
                 ))
             return search_results
         elif query_type is DownloadTypeEnum.artist:
@@ -443,16 +462,35 @@ class ModuleInterface:
             return search_results
         elif query_type is DownloadTypeEnum.playlist:
             search_results = []
-            for i in results:
+            for idx, i in enumerate(results):
+                if not i.get('NB_SONG'):
+                    continue
                 cover_url = None
                 if i.get('PLAYLIST_PICTURE'):
                     cover_url = self.get_image_url(i['PLAYLIST_PICTURE'], ImageType.playlist, ImageFileTypeEnum.jpg, 56, 80)
+                # Deezer search/internal API often return a placeholder. Deemix uses public API (playlist/id) for proper composite cover. Prefer it for first 25.
+                if idx < 25:
+                    try:
+                        public_cover = self.session.get_playlist_cover_public(i['PLAYLIST_ID'])
+                        if public_cover:
+                            cover_url = public_cover
+                        if not cover_url:
+                            full = self.session.get_playlist(i['PLAYLIST_ID'], 4, 0)
+                            p_data = full.get('DATA') if isinstance(full.get('DATA'), dict) else None
+                            p_pic = (p_data.get('PLAYLIST_PICTURE') or '').strip() if p_data else ''
+                            songs = (full.get('SONGS') or {}).get('data') or []
+                            if p_pic:
+                                cover_url = self.get_image_url(p_pic, ImageType.playlist, ImageFileTypeEnum.jpg, 56, 80)
+                            elif songs and isinstance(songs[0], dict) and songs[0].get('ALB_PICTURE'):
+                                cover_url = self.get_image_url(songs[0]['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                    except Exception:
+                        pass
                 search_results.append(SearchResult(
                     result_id = i['PLAYLIST_ID'],
                     name = i['TITLE'],
                     artists = [i['PARENT_USERNAME']],
                     image_url = cover_url,
-                    additional = [i["NB_SONG"]]
+                    additional = [f"1 track" if i['NB_SONG'] == 1 else f"{i['NB_SONG']} tracks"]
                 ))
             return search_results
 

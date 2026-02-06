@@ -192,6 +192,17 @@ class DeezerAPI:
     def get_playlist(self, id, nb, start):
         return self._api_call('deezer.pagePlaylist', {'nb': nb, 'start': start, 'playlist_id': id, 'lang': self.language, 'tab': 0, 'tags': True, 'header': True})
 
+    def get_playlist_cover_public(self, playlist_id):
+        """Fetch playlist from public Deezer API to get the composite (2x2) cover URL.
+        The internal pagePlaylist often returns a placeholder; the public API returns the proper cover."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/playlist/{playlist_id}', timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            return (data.get('picture_xl') or data.get('picture_big') or data.get('picture_medium') or '').strip() or None
+        except Exception:
+            return None
+
     def get_artist_name(self, id):
         return self._api_call('artist.getData', {'art_id': id, 'array_default': ['ART_NAME']})['ART_NAME']
 
