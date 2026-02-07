@@ -71,6 +71,36 @@ class ModuleInterface:
         if arl:
             self.check_sub()
 
+    def _ensure_credentials(self):
+        """Require valid credentials before download/metadata. Without this, we would fail with
+        AttributeError (e.g. missing language) or only get previews. Matches Spotify/Qobuz: show
+        what's missing and where to fill it in."""
+        if getattr(self.session, 'api_token', None):
+            return
+        arl = self.tsc.read('arl') or (self.settings.get('arl') or '').strip()
+        email = (self.settings.get('email') or '').strip()
+        password = (self.settings.get('password') or '').strip()
+        if arl:
+            try:
+                self.session.login_via_arl(arl)
+                self.tsc.set('arl', arl)
+                self.check_sub()
+            except self.exception:
+                if email and password:
+                    self.login(email, password)
+                else:
+                    raise
+            return
+        if email and password:
+            self.login(email, password)
+            return
+        error_msg = (
+            'Deezer credentials are missing in settings.json. '
+            'Please fill in either email and password, or arl. '
+            'Use the OrpheusDL GUI Settings tab (Deezer) or edit config/settings.json directly.'
+        )
+        raise self.exception(error_msg)
+
     def login(self, email: str, password: str):
         arl_from_settings = (self.settings.get('arl') or '').strip()
         if arl_from_settings:
@@ -106,6 +136,7 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, data={}, alb_tags={}) -> TrackInfo:
+        self._ensure_credentials()
         is_user_upped = int(track_id) < 0
         format = self.quality_parse[quality_tier] if not is_user_upped else 'MP3_MISC'
 
@@ -228,6 +259,7 @@ class ModuleInterface:
         )
 
     def get_album_info(self, album_id: str, data={}) -> Optional[AlbumInfo]:
+        self._ensure_credentials()
         album = data[album_id] if album_id in data else self.session.get_album(album_id)
         a_data = album['DATA']
 
@@ -266,6 +298,7 @@ class ModuleInterface:
         )
 
     def get_playlist_info(self, playlist_id: str, data={}) -> PlaylistInfo:
+        self._ensure_credentials()
         playlist = data[playlist_id] if playlist_id in data else self.session.get_playlist(playlist_id, -1, 0)
         p_data = playlist['DATA']
         songs = playlist.get('SONGS', {}).get('data') or []
@@ -301,6 +334,7 @@ class ModuleInterface:
         )
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, artist_name = None) -> ArtistInfo:
+        self._ensure_credentials()
         name = artist_name if artist_name else self.session.get_artist_name(artist_id)
         discography = self.session.get_artist_discography(artist_id, 0, -1, get_credited_albums)
         albums_out = []
@@ -376,19 +410,7 @@ class ModuleInterface:
         return LyricsInfo(embedded=lyrics['LYRICS_TEXT'], synced=synced_text)
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 10):
-        # Require valid session or credentials so we always show a clear message instead of VALID_TOKEN_REQUIRED on repeat searches
-        if not getattr(self.session, 'api_token', None):
-            email = (self.settings.get('email') or '').strip()
-            password = (self.settings.get('password') or '').strip()
-            arl = (self.settings.get('arl') or '').strip()
-            has_email_pass = email and password
-            has_arl = bool(arl)
-            if not has_email_pass and not has_arl:
-                raise self.exception(
-                    'Deezer credentials are required. Please fill in your email and password in the settings. '
-                    'Alternatively, you can use ARL instead.'
-                )
-            self.login(email, password)
+        self._ensure_credentials()
 
         results = {}
         if track_info and track_info.tags.isrc:
