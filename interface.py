@@ -71,6 +71,10 @@ class ModuleInterface:
         if arl:
             self.check_sub()
 
+    def ensure_can_download(self):
+        """Raise with credentials message if not authenticated. Call before starting batch track downloads (album/playlist/artist)."""
+        self._ensure_credentials()
+
     def _ensure_credentials(self):
         """Require valid credentials before download/metadata. Without this, we would fail with
         AttributeError (e.g. missing language) or only get previews. Matches Spotify/Qobuz: show
@@ -136,6 +140,9 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, data={}, alb_tags={}) -> TrackInfo:
+        if not self.session.is_authenticated():
+            return self._get_track_info_public(track_id, quality_tier, codec_options, data, alb_tags)
+
         self._ensure_credentials()
         is_user_upped = int(track_id) < 0
         format = self.quality_parse[quality_tier] if not is_user_upped else 'MP3_MISC'
@@ -246,7 +253,62 @@ class ModuleInterface:
             error = error
         )
 
+    def _get_track_info_public(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, data={}, alb_tags={}) -> TrackInfo:
+        """Build TrackInfo from public API when not authenticated. Download will require login."""
+        t = self.session.get_track_public(track_id)
+        if not t:
+            raise self.exception('Track not found or unavailable.')
+        album = t.get('album') or {}
+        release_date = (album.get('release_date') or t.get('release_date') or '')
+        tags = Tags(
+            track_number=t.get('track_position'),
+            copyright=None,
+            isrc=t.get('isrc') or '',
+            disc_number=t.get('disk_number'),
+            replay_gain=None,
+            release_date=release_date,
+        )
+        for key in alb_tags:
+            setattr(tags, key, alb_tags[key])
+        title = t.get('title') or t.get('title_short', '')
+        if t.get('title_version'):
+            title = f"{title} {t['title_version']}"
+        artist = t.get('artist') or {}
+        artists = [artist.get('name', '')] if isinstance(artist, dict) else [str(artist)]
+        cover_url = (album.get('cover_big') or album.get('cover_medium') or album.get('cover_small') or '').strip() or None
+        duration_sec = t.get('duration')
+        if duration_sec is not None:
+            duration_sec = int(duration_sec)
+        preview_url = (t.get('preview') or '').strip() or None
+        return TrackInfo(
+            name=title,
+            album_id=str(album.get('id', '')),
+            album=album.get('title', ''),
+            artists=artists,
+            tags=tags,
+            codec=CodecEnum.MP3,
+            cover_url=cover_url,
+            preview_url=preview_url,
+            release_year=int(release_date[:4]) if len(release_date) >= 4 else None,
+            duration=duration_sec,
+            explicit=bool(t.get('explicit_lyrics', False)),
+            artist_id=str(artist.get('id', '')) if isinstance(artist, dict) else None,
+            bit_depth=16,
+            sample_rate=44.1,
+            bitrate=128,
+            download_extra_kwargs={},
+            cover_extra_kwargs={},
+            credits_extra_kwargs={},
+            lyrics_extra_kwargs={},
+            error=(
+                'Deezer credentials are missing in settings.json. '
+                'Please fill in either email and password, or arl. '
+                'Use the OrpheusDL GUI Settings tab (Deezer) or edit config/settings.json directly.'
+            ),
+        )
+
     def get_track_download(self, id, track_token, track_token_expiry, format):
+        self._ensure_credentials()
         path = create_temp_filename()
 
         url = self.session.get_track_url(id, track_token, track_token_expiry, format)
@@ -259,6 +321,8 @@ class ModuleInterface:
         )
 
     def get_album_info(self, album_id: str, data={}) -> Optional[AlbumInfo]:
+        if not self.session.is_authenticated():
+            return self._get_album_info_public(album_id)
         self._ensure_credentials()
         album = data[album_id] if album_id in data else self.session.get_album(album_id)
         a_data = album['DATA']
@@ -297,7 +361,66 @@ class ModuleInterface:
             track_extra_kwargs = {'alb_tags': alb_tags},
         )
 
+    def _get_album_info_public(self, album_id: str) -> Optional[AlbumInfo]:
+        """Build AlbumInfo from public API when not authenticated."""
+        raw = self.session.get_album_public(album_id)
+        if not raw:
+            return None
+        tracks_data = (raw.get('tracks') or {}).get('data') or []
+        track_ids = [str(t.get('id', '')) for t in tracks_data if t.get('id') is not None]
+        release_date = raw.get('release_date') or ''
+        release_year = int(release_date[:4]) if len(release_date) >= 4 else None
+        artist = raw.get('artist') or {}
+        artist_name = artist.get('name', '') if isinstance(artist, dict) else ''
+        cover_url = (raw.get('cover_big') or raw.get('cover_medium') or raw.get('cover_xl') or '').strip() or None
+        alb_tags = {
+            'total_tracks': len(track_ids),
+            'total_discs': 1,
+            'upc': raw.get('upc') or '',
+            'label': '',
+            'album_artist': artist_name,
+            'release_date': release_date,
+        }
+        return AlbumInfo(
+            name=raw.get('title', ''),
+            artist=artist_name,
+            tracks=track_ids,
+            release_year=release_year or 0,
+            explicit=bool(raw.get('explicit_lyrics', False)),
+            artist_id=str(artist.get('id', '')) if isinstance(artist, dict) else None,
+            cover_url=cover_url,
+            cover_type=ImageFileTypeEnum.jpg,
+            all_track_cover_jpg_url=cover_url,
+            track_extra_kwargs={'alb_tags': alb_tags},
+        )
+
+    def _get_playlist_info_public(self, playlist_id: str) -> PlaylistInfo:
+        """Build PlaylistInfo from public API when not authenticated."""
+        raw = self.session.get_playlist_public(playlist_id)
+        if not raw:
+            raise self.exception('Playlist not found or unavailable.')
+        tracks_data = (raw.get('tracks') or {}).get('data') or []
+        track_ids = [str(t.get('id', '')) for t in tracks_data if t.get('id') is not None]
+        user = raw.get('user') or {}
+        creator = user.get('name', '') if isinstance(user, dict) else ''
+        creation = raw.get('creation_date') or raw.get('created') or ''
+        release_year = int(creation[:4]) if creation and len(str(creation)) >= 4 else 0
+        cover_url = (raw.get('picture_xl') or raw.get('picture_big') or raw.get('picture_medium') or '').strip() or None
+        return PlaylistInfo(
+            name=raw.get('title', ''),
+            creator=creator,
+            tracks=track_ids,
+            release_year=release_year,
+            creator_id=str(user.get('id', '')) if isinstance(user, dict) else None,
+            cover_url=cover_url,
+            cover_type=ImageFileTypeEnum.jpg,
+            description=(raw.get('description') or '').strip() or None,
+            track_extra_kwargs={},
+        )
+
     def get_playlist_info(self, playlist_id: str, data={}) -> PlaylistInfo:
+        if not self.session.is_authenticated():
+            return self._get_playlist_info_public(playlist_id)
         self._ensure_credentials()
         playlist = data[playlist_id] if playlist_id in data else self.session.get_playlist(playlist_id, -1, 0)
         p_data = playlist['DATA']
@@ -334,6 +457,8 @@ class ModuleInterface:
         )
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, artist_name = None) -> ArtistInfo:
+        if not self.session.is_authenticated():
+            return self._get_artist_info_public(artist_id, artist_name)
         self._ensure_credentials()
         name = artist_name if artist_name else self.session.get_artist_name(artist_id)
         discography = self.session.get_artist_discography(artist_id, 0, -1, get_credited_albums)
@@ -365,8 +490,33 @@ class ModuleInterface:
             albums = albums_out if albums_out else self.session.get_artist_album_ids(artist_id, 0, -1, get_credited_albums),
         )
 
+    def _get_artist_info_public(self, artist_id: str, artist_name=None) -> ArtistInfo:
+        """Build ArtistInfo from public API when not authenticated."""
+        artist = self.session.get_artist_public(artist_id)
+        if not artist:
+            raise self.exception('Artist not found or unavailable.')
+        name = artist_name or artist.get('name', '')
+        albums_raw = self.session.get_artist_albums_public(artist_id, 0, 200)
+        albums_out = []
+        for a in albums_raw:
+            aid = a.get('id', '')
+            title = a.get('title', '')
+            release_date = a.get('release_date') or ''
+            release_year = str(release_date)[:4] if release_date else None
+            cover_url = (a.get('cover_medium') or a.get('cover_small') or '').strip() or None
+            albums_out.append({
+                'id': str(aid),
+                'name': title,
+                'artist': name,
+                'release_year': release_year,
+                'cover_url': cover_url,
+            })
+        return ArtistInfo(name=name, artist_id=str(artist.get('id', '')), albums=albums_out)
+
     def get_track_credits(self, track_id: str, data={}):
         if int(track_id) < 0:
+            return []
+        if not self.session.is_authenticated():
             return []
 
         credits = data[track_id] if track_id in data else self.session.get_track_contributors(track_id)
@@ -379,6 +529,14 @@ class ModuleInterface:
         return [CreditsInfo(k, v) for k, v in credits.items()]
 
     def get_track_cover(self, track_id: str, cover_options: CoverOptions, data={}) -> CoverInfo:
+        if not self.session.is_authenticated():
+            t = self.session.get_track_public(track_id)
+            if t and t.get('album'):
+                cover_url = (t['album'].get('cover_big') or t['album'].get('cover_medium') or t['album'].get('cover_small') or '').strip()
+                if cover_url:
+                    return CoverInfo(url=cover_url, file_type=ImageFileTypeEnum.jpg)
+            return CoverInfo(url='', file_type=ImageFileTypeEnum.jpg)
+
         cover_md5 = data[track_id] if track_id in data else self.session.get_track_cover(track_id)
 
         # placeholder images can't be requested as pngs
@@ -389,6 +547,8 @@ class ModuleInterface:
 
     def get_track_lyrics(self, track_id: str, data={}) -> LyricsInfo:
         if int(track_id) < 0:
+            return LyricsInfo()
+        if not self.session.is_authenticated():
             return LyricsInfo()
 
         try:
@@ -410,8 +570,12 @@ class ModuleInterface:
         return LyricsInfo(embedded=lyrics['LYRICS_TEXT'], synced=synced_text)
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 10):
-        self._ensure_credentials()
+        use_public = not self.session.is_authenticated()
 
+        if use_public:
+            return self._search_public(query_type, query, track_info, limit)
+
+        self._ensure_credentials()
         results = {}
         if track_info and track_info.tags.isrc:
             results = [self.session.get_track_data_by_isrc(track_info.tags.isrc)]
@@ -515,6 +679,105 @@ class ModuleInterface:
                     additional = [f"1 track" if i['NB_SONG'] == 1 else f"{i['NB_SONG']} tracks"]
                 ))
             return search_results
+
+    def _search_public(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo, limit: int):
+        """Search using public API when not authenticated. Returns list of SearchResult."""
+        type_map = {
+            DownloadTypeEnum.track: 'track',
+            DownloadTypeEnum.album: 'album',
+            DownloadTypeEnum.artist: 'artist',
+            DownloadTypeEnum.playlist: 'playlist',
+        }
+        resource_type = type_map.get(query_type, 'track')
+        data, _ = self.session.search_public(query, resource_type, 0, limit)
+
+        if query_type is DownloadTypeEnum.track:
+            if track_info and track_info.tags and getattr(track_info.tags, 'isrc', None):
+                try:
+                    one = self.session.get_track_data_by_isrc(track_info.tags.isrc)
+                    data = [one]
+                except self.exception:
+                    data = []
+            track_ids = [str(i.get('SNG_ID') or i.get('id')) for i in data if (i.get('SNG_ID') or i.get('id'))]
+            public_data = self.session.get_tracks_public_data(track_ids) if track_ids else {}
+            out = []
+            for i in data:
+                tid = str(i.get('SNG_ID') or i.get('id', ''))
+                title = (i.get('SNG_TITLE') or i.get('title') or i.get('title_short', ''))
+                if i.get('VERSION') or i.get('title_version'):
+                    title = f"{title} {i.get('VERSION') or i.get('title_version', '')}"
+                artists = i.get('ARTISTS')
+                if artists:
+                    artists = [a.get('ART_NAME', a) if isinstance(a, dict) else str(a) for a in artists]
+                else:
+                    art = i.get('artist') or {}
+                    artists = [art.get('name', '')] if isinstance(art, dict) else [str(art)]
+                if not artists:
+                    artists = ['']
+                duration = i.get('DURATION') or i.get('duration')
+                if duration is not None:
+                    duration = int(duration)
+                explicit = i.get('EXPLICIT_LYRICS') == '1' if 'EXPLICIT_LYRICS' in i else bool(i.get('explicit_lyrics', False))
+                cover_url = None
+                if i.get('ALB_PICTURE'):
+                    cover_url = self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                elif i.get('album') and isinstance(i['album'], dict):
+                    cover_url = (i['album'].get('cover_medium') or i['album'].get('cover_small') or '').strip() or None
+                if not cover_url and tid in public_data:
+                    cover_url = public_data[tid].get('album_cover_small') or public_data[tid].get('album_cover_medium')
+                preview_url = (public_data.get(tid) or {}).get('preview') if tid else None
+                if not preview_url and isinstance(i.get('preview'), str):
+                    preview_url = i['preview']
+                album_title = (i.get('ALB_TITLE') or (i.get('album') or {}).get('title', ''))
+                out.append(SearchResult(
+                    result_id=tid,
+                    name=title,
+                    artists=artists,
+                    explicit=explicit,
+                    duration=duration,
+                    image_url=cover_url,
+                    preview_url=preview_url,
+                    additional=[album_title] if album_title else None,
+                ))
+            return out
+
+        if query_type is DownloadTypeEnum.album:
+            out = []
+            for i in data:
+                name = i.get('ALB_TITLE') or i.get('title', '')
+                artist = (i.get('artist') or {}).get('name', '') if isinstance(i.get('artist'), dict) else (i.get('ART_NAME') or '')
+                release = i.get('PHYSICAL_RELEASE_DATE') or i.get('release_date') or ''
+                year = str(release)[:4] if release else None
+                explicit = (i.get('EXPLICIT_ALBUM_CONTENT') or {}).get('EXPLICIT_LYRICS_STATUS') in (1, 4) if isinstance(i.get('EXPLICIT_ALBUM_CONTENT'), dict) else bool(i.get('explicit_lyrics', False))
+                cover = i.get('cover_medium') or i.get('cover_small') or (self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80) if i.get('ALB_PICTURE') else None)
+                nb = i.get('NUMBER_TRACK') or i.get('nb_tracks', 0)
+                out.append(SearchResult(result_id=str(i.get('id', '')), name=name, artists=[artist], year=year, explicit=explicit, image_url=cover, additional=[f"{nb} track(s)"]))
+            return out
+
+        if query_type is DownloadTypeEnum.artist:
+            return [
+                SearchResult(
+                    result_id=str(i.get('id', '')),
+                    name=i.get('ART_NAME') or i.get('name', ''),
+                    image_url=(i.get('ART_PICTURE') and self.get_image_url(i['ART_PICTURE'], ImageType.artist, ImageFileTypeEnum.jpg, 56, 80)) or (i.get('picture_medium') or i.get('picture_small') or '').strip() or None,
+                    extra_kwargs={'artist_name': i.get('ART_NAME') or i.get('name', '')},
+                )
+                for i in data
+            ]
+
+        if query_type is DownloadTypeEnum.playlist:
+            return [
+                SearchResult(
+                    result_id=str(i.get('id', '')),
+                    name=i.get('TITLE') or i.get('title', ''),
+                    artists=[(i.get('PARENT_USERNAME') or (i.get('user') or {}).get('name', ''))],
+                    image_url=(i.get('PLAYLIST_PICTURE') or i.get('picture_medium') or i.get('picture_small') or '').strip() or None,
+                    additional=[f"{i.get('NB_SONG') or i.get('nb_tracks', 0)} track(s)"],
+                )
+                for i in data
+            ]
+
+        return []
 
     def get_image_url(self, md5, img_type: ImageType, file_type: ImageFileTypeEnum, res, compression):
         if res > 3000:

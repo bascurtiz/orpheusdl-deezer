@@ -127,6 +127,65 @@ class DeezerAPI:
     def get_track_cover(self, id):
         return self._api_call('song.getData', {'sng_id': id, 'array_default': ['ALB_PICTURE']})['ALB_PICTURE']
     
+    def is_authenticated(self):
+        """True if session has been logged in (internal API + download available)."""
+        return bool(getattr(self, 'api_token', None))
+
+    def search_public(self, query, resource_type, index=0, limit=25):
+        """Search using public API (no login). resource_type: 'track', 'album', 'artist', 'playlist'.
+        Returns (list of items, total count)."""
+        url = f'https://api.deezer.com/search/{resource_type}'
+        params = {'q': query, 'index': index, 'limit': limit}
+        try:
+            resp = self.s.get(url, params=params, timeout=15).json()
+            if 'error' in resp:
+                return [], 0
+            return resp.get('data') or [], resp.get('total', 0)
+        except Exception:
+            return [], 0
+
+    def get_track_public(self, track_id):
+        """Get track metadata from public API (no login). Returns raw JSON or None."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/track/{track_id}', timeout=10).json()
+            return r if 'error' not in r else None
+        except Exception:
+            return None
+
+    def get_album_public(self, album_id):
+        """Get album metadata and track list from public API (no login). Returns raw JSON or None."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/album/{album_id}', timeout=10).json()
+            return r if 'error' not in r else None
+        except Exception:
+            return None
+
+    def get_artist_public(self, artist_id):
+        """Get artist metadata from public API (no login). Returns raw JSON or None."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/artist/{artist_id}', timeout=10).json()
+            return r if 'error' not in r else None
+        except Exception:
+            return None
+
+    def get_artist_albums_public(self, artist_id, index=0, limit=100):
+        """Get artist albums from public API (no login). Returns list of album dicts."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/artist/{artist_id}/albums', params={'index': index, 'limit': limit}, timeout=10).json()
+            if 'error' in r:
+                return []
+            return r.get('data') or []
+        except Exception:
+            return []
+
+    def get_playlist_public(self, playlist_id):
+        """Get playlist metadata and tracks from public API (no login). Returns raw JSON or None."""
+        try:
+            r = self.s.get(f'https://api.deezer.com/playlist/{playlist_id}', timeout=10).json()
+            return r if 'error' not in r else None
+        except Exception:
+            return None
+
     def get_track_data_by_isrc(self, isrc):
         resp = self.s.get(f'https://api.deezer.com/track/isrc:{isrc}').json()
         if 'error' in resp:
