@@ -98,6 +98,7 @@ class ModuleInterface:
         if email and password:
             self.login(email, password)
             return
+        
         error_msg = (
             'Deezer credentials are missing in settings.json. '
             'Please fill in either email and password, or arl. '
@@ -140,8 +141,8 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, data={}, alb_tags={}) -> TrackInfo:
-        if not self.session.is_authenticated():
-            return self._get_track_info_public(track_id, quality_tier, codec_options, data, alb_tags)
+        # if not self.session.is_authenticated():
+        #     return self._get_track_info_public(track_id, quality_tier, codec_options, data, alb_tags)
 
         self._ensure_credentials()
         is_user_upped = int(track_id) < 0
