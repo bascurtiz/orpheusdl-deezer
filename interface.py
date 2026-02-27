@@ -61,7 +61,8 @@ class ModuleInterface:
             QualityEnum.MEDIUM: 'MP3_320',
             QualityEnum.HIGH: 'MP3_320',
             QualityEnum.LOSSLESS: 'FLAC',
-            QualityEnum.HIFI: 'FLAC'
+            QualityEnum.HIFI: 'FLAC',
+            QualityEnum.ATMOS: 'FLAC'
         }
         self.format = self.quality_parse[module_controller.orpheus_options.quality_tier]
         self.compression_nums = {
