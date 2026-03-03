@@ -257,7 +257,10 @@ class ModuleInterface:
 
     def _get_track_info_public(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, data={}, alb_tags={}) -> TrackInfo:
         """Build TrackInfo from public API when not authenticated. Download will require login."""
-        t = self.session.get_track_public(track_id)
+        # Use pre-fetched public data when available (e.g. from playlist expansion)
+        t = data.get(track_id) or data.get(str(track_id)) if data else None
+        if not t:
+            t = self.session.get_track_public(track_id)
         if not t:
             raise self.exception('Track not found or unavailable.')
         album = t.get('album') or {}
@@ -401,8 +404,18 @@ class ModuleInterface:
         raw = self.session.get_playlist_public(playlist_id)
         if not raw:
             raise self.exception('Playlist not found or unavailable.')
-        tracks_data = (raw.get('tracks') or {}).get('data') or []
+        # Fetch ALL tracks with pagination (public API embeds at most ~100)
+        tracks_data = self.session.get_playlist_tracks_public(playlist_id)
+        if not tracks_data:
+            # Fallback to embedded tracks if paginated endpoint fails
+            tracks_data = (raw.get('tracks') or {}).get('data') or []
         track_ids = [str(t.get('id', '')) for t in tracks_data if t.get('id') is not None]
+        # Build pre-fetched data dict so _get_track_info_public can skip individual API calls
+        prefetched = {}
+        for t in tracks_data:
+            tid = t.get('id')
+            if tid is not None:
+                prefetched[str(tid)] = t
         user = raw.get('user') or {}
         creator = user.get('name', '') if isinstance(user, dict) else ''
         creation = raw.get('creation_date') or raw.get('created') or ''
@@ -417,7 +430,7 @@ class ModuleInterface:
             cover_url=cover_url,
             cover_type=ImageFileTypeEnum.jpg,
             description=(raw.get('description') or '').strip() or None,
-            track_extra_kwargs={},
+            track_extra_kwargs={'data': prefetched},
         )
 
     def get_playlist_info(self, playlist_id: str, data={}) -> PlaylistInfo:

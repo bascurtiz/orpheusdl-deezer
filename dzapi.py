@@ -186,6 +186,31 @@ class DeezerAPI:
         except Exception:
             return None
 
+    def get_playlist_tracks_public(self, playlist_id, limit=100, max_tracks=10000):
+        """Fetch ALL tracks from a playlist via the public API with pagination.
+        Returns list of full track dicts (title, artist, album, duration, preview, etc.)."""
+        all_tracks = []
+        url = f'https://api.deezer.com/playlist/{playlist_id}/tracks'
+        params = {'index': 0, 'limit': limit}
+        try:
+            while url and len(all_tracks) < max_tracks:
+                resp = self.s.get(url, params=params, timeout=15).json()
+                if 'error' in resp:
+                    break
+                batch = resp.get('data') or []
+                if not batch:
+                    break
+                all_tracks.extend(batch)
+                next_url = resp.get('next')
+                if next_url:
+                    url = next_url
+                    params = {}  # next URL already contains query params
+                else:
+                    break
+        except Exception:
+            pass
+        return all_tracks
+
     def get_track_data_by_isrc(self, isrc):
         resp = self.s.get(f'https://api.deezer.com/track/isrc:{isrc}').json()
         if 'error' in resp:
