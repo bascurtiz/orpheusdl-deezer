@@ -753,7 +753,7 @@ class ModuleInterface:
                 explicit = (i.get('EXPLICIT_ALBUM_CONTENT') or {}).get('EXPLICIT_LYRICS_STATUS') in (1, 4) if isinstance(i.get('EXPLICIT_ALBUM_CONTENT'), dict) else bool(i.get('explicit_lyrics', False))
                 cover = i.get('cover_medium') or i.get('cover_small') or (self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80) if i.get('ALB_PICTURE') else None)
                 nb = i.get('NUMBER_TRACK') or i.get('nb_tracks', 0)
-                out.append(SearchResult(result_id=str(i.get('id', '')), name=name, artists=[artist], year=year, explicit=explicit, image_url=cover, additional=[f"{nb} track(s)"]))
+                out.append(SearchResult(result_id=str(i.get('id', '')), name=name, artists=[artist], year=year, explicit=explicit, image_url=cover, additional=[f"1 track" if nb == 1 else f"{nb} tracks"]))
             return out
 
         if query_type is DownloadTypeEnum.artist:
@@ -774,7 +774,7 @@ class ModuleInterface:
                     name=i.get('TITLE') or i.get('title', ''),
                     artists=[(i.get('PARENT_USERNAME') or (i.get('user') or {}).get('name', ''))],
                     image_url=(i.get('PLAYLIST_PICTURE') or i.get('picture_medium') or i.get('picture_small') or '').strip() or None,
-                    additional=[f"{i.get('NB_SONG') or i.get('nb_tracks', 0)} track(s)"],
+                    additional=[f"1 track" if (i.get('NB_SONG') or i.get('nb_tracks', 0)) == 1 else f"{i.get('NB_SONG') or i.get('nb_tracks', 0)} tracks"],
                 )
                 for i in data
             ]
