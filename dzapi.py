@@ -315,7 +315,8 @@ class DeezerAPI:
             'filter_role_id': [0,5] if credited_albums else [0],
             'nb_songs': 0,
             'discography_mode': 'all' if credited_albums else None,
-            'array_default': ['ALB_ID', 'ALB_TITLE', 'ART_NAME', 'PHYSICAL_RELEASE_DATE', 'ORIGINAL_RELEASE_DATE', 'ALB_PICTURE'],
+            'array_default': ['ALB_ID', 'ALB_TITLE', 'ART_NAME', 'PHYSICAL_RELEASE_DATE', 'ORIGINAL_RELEASE_DATE', 'ALB_PICTURE', 'EXPLICIT_ALBUM', 'EXPLICIT_ALBUM_CONTENT', 'EXPLICIT_LYRICS']
+,
         }
         resp = self._api_call('album.getDiscography', payload)
         return resp.get('data') or []

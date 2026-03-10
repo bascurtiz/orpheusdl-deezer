@@ -1,3 +1,4 @@
+import concurrent.futures
 import re
 from enum import Enum
 from urllib.parse import urlparse
@@ -491,15 +492,83 @@ class ModuleInterface:
                 pic = data.get('ALB_PICTURE') if isinstance(data, dict) else None
                 if pic:
                     cover_url = self.get_image_url(pic, ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
+                # Multi-level explicit check for Deezer
+                explicit_status = None
+                exp_content = data.get('EXPLICIT_ALBUM_CONTENT') or a.get('EXPLICIT_ALBUM_CONTENT')
+                if isinstance(exp_content, dict):
+                    explicit_status = str(exp_content.get('EXPLICIT_LYRICS_STATUS')) in ('1', '4')
+                
+                if not explicit_status:
+                    # Check all known explicit-related keys
+                    for k in ('EXPLICIT_LYRICS', 'explicit_lyrics', 'EXPLICIT_ALBUM', 'explicit_content_lyrics'):
+                        val = data.get(k) if isinstance(data, dict) else None
+                        if val is None: val = a.get(k)
+                        if val is not None:
+                            if (str(val).lower() == "true") or (str(val) in ("1", "4")):
+                                explicit_status = True
+                                break
+
+                # Title-based fallback (last resort)
+                if not explicit_status and title and ("explicit" in title.lower() or "(explicit" in title.lower()):
+                    explicit_status = True
+                
+                # If still not sure, leave as None to force batch fetch check
+                if not explicit_status:
+                    explicit_status = None
+
                 albums_out.append({
                     'id': data.get('ALB_ID', a.get('ALB_ID', '')),
                     'name': title,
                     'artist': data.get('ART_NAME', name) if isinstance(data, dict) else name,
                     'release_year': release_year,
                     'cover_url': cover_url,
+                    'explicit': explicit_status,
                 })
-            else:
-                albums_out.append(data.get('ALB_ID', a.get('ALB_ID', a)) if isinstance(data, dict) else a.get('ALB_ID', a))
+        # Batch fetch missing durations/years/track counts for albums (fetch explicit if not confirmed True)
+        missing_metadata = [idx for idx, t in enumerate(albums_out) if isinstance(t, dict) and (not t.get('duration') or not t.get('release_year') or not t.get('additional') or t.get('explicit') is not True)]
+        if missing_metadata:
+            a_meta = {}
+            def _fetch_dz_album_meta(aid):
+                try:
+                    a_data = self.session.get_album_public(aid)
+                    if a_data:
+                        nb_tracks = a_data.get('nb_tracks')
+                        # Check multiple explicit keys in the public album data
+                        explicit = any([
+                            a_data.get('explicit_lyrics'),
+                            str(a_data.get('explicit_content_lyrics')) == '1',
+                            "explicit" in str(a_data.get('title')).lower()
+                        ])
+                        
+                        # Fallback: check tracks if album level info is missing or false
+
+                        return aid, {
+                            'dur': a_data.get('duration'),
+                            'year': str(a_data.get('release_date', ''))[:4] or None,
+                            'tracks': [f"1 track" if nb_tracks == 1 else f"{nb_tracks} tracks"] if nb_tracks is not None else None,
+                            'explicit': explicit
+                        }
+                except: pass
+                return aid, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                fetch_ids = [albums_out[idx]['id'] for idx in missing_metadata]
+                for aid, meta in executor.map(_fetch_dz_album_meta, fetch_ids):
+                    if meta: a_meta[str(aid)] = meta
+            
+            for idx in missing_metadata:
+                t = albums_out[idx]
+                aid = str(t['id'])
+                if aid in a_meta:
+                    if not t.get('duration'):
+                        t['duration'] = a_meta[aid]['dur']
+                    if not t.get('release_year'):
+                        t['release_year'] = a_meta[aid]['year']
+                    if not t.get('additional'):
+                        t['additional'] = a_meta[aid]['tracks']
+                    if t.get('explicit') is not True:
+                        t['explicit'] = a_meta[aid].get('explicit')
+
         return ArtistInfo(
             name = name,
             albums = albums_out if albums_out else self.session.get_artist_album_ids(artist_id, 0, -1, get_credited_albums),
@@ -519,13 +588,76 @@ class ModuleInterface:
             release_date = a.get('release_date') or ''
             release_year = str(release_date)[:4] if release_date else None
             cover_url = (a.get('cover_medium') or a.get('cover_small') or '').strip() or None
+            nb_tracks = a.get('nb_tracks')
+            additional = [f"1 track" if nb_tracks == 1 else f"{nb_tracks} tracks"] if nb_tracks is not None else None
+            
+            # Extract explicit status for public path
+            explicit_status = None
+            for k in ('explicit_lyrics', 'explicit_content_lyrics', 'explicitStatus', 'isExplicit'):
+                val = a.get(k)
+                if val is not None:
+                    explicit_status = (str(val).lower() == "true") or (str(val) in ("1", "4"))
+                    if explicit_status: break
+            
+            if not explicit_status and title and ("explicit" in title.lower() or "(explicit" in title.lower()):
+                explicit_status = True
+            
+            if not explicit_status:
+                explicit_status = None
+                
             albums_out.append({
                 'id': str(aid),
                 'name': title,
                 'artist': name,
                 'release_year': release_year,
                 'cover_url': cover_url,
+                'additional': additional,
+                'explicit': explicit_status,
             })
+        
+        # Batch fetch missing durations/years/track counts/explicit status for albums
+        missing_metadata = [idx for idx, t in enumerate(albums_out) if isinstance(t, dict) and (not t.get('duration') or not t.get('release_year') or not t.get('additional') or t.get('explicit') is not True)]
+        if missing_metadata:
+            a_meta = {}
+            def _fetch_dz_album_meta_public(aid):
+                try:
+                    a_data = self.session.get_album_public(aid)
+                    if a_data:
+                        nb_tracks = a_data.get('nb_tracks')
+                        # Check multiple explicit keys in the public album data
+                        explicit = any([
+                            a_data.get('explicit_lyrics'),
+                            str(a_data.get('explicit_content_lyrics')) == '1',
+                            "explicit" in str(a_data.get('title')).lower()
+                        ])
+                        
+                        return aid, {
+                            'dur': a_data.get('duration'),
+                            'year': str(a_data.get('release_date', ''))[:4] or None,
+                            'tracks': [f"1 track" if nb_tracks == 1 else f"{nb_tracks} tracks"] if nb_tracks is not None else None,
+                            'explicit': explicit
+                        }
+                except: pass
+                return aid, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                fetch_ids = [albums_out[idx]['id'] for idx in missing_metadata]
+                for aid, meta in executor.map(_fetch_dz_album_meta_public, fetch_ids):
+                    if meta: a_meta[str(aid)] = meta
+            
+            for idx in missing_metadata:
+                t = albums_out[idx]
+                aid = str(t['id'])
+                if aid in a_meta:
+                    if not t.get('duration'):
+                        t['duration'] = a_meta[aid]['dur']
+                    if not t.get('release_year'):
+                        t['release_year'] = a_meta[aid]['year']
+                    if not t.get('additional'):
+                        t['additional'] = a_meta[aid]['tracks']
+                    if t.get('explicit') is not True:
+                        t['explicit'] = a_meta[aid].get('explicit')
+
         return ArtistInfo(name=name, artist_id=str(artist.get('id', '')), albums=albums_out)
 
     def get_track_credits(self, track_id: str, data={}):
@@ -616,20 +748,45 @@ class ModuleInterface:
                 cover_url = None
                 if i.get('ALB_PICTURE'):
                     cover_url = self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80)
-                # Fallback to public API cover if internal API doesn't have it
                 elif track_id in public_data and public_data[track_id].get('album_cover_small'):
                     cover_url = public_data[track_id].get('album_cover_small')
+                
+                year = i.get('PHYSICAL_RELEASE_DATE', '').split('-')[0] if i.get('PHYSICAL_RELEASE_DATE') else None
                 
                 search_results.append(SearchResult(
                     result_id = i['SNG_ID'],
                     name = i['SNG_TITLE'] if not i.get('VERSION') else f'{i["SNG_TITLE"]} {i["VERSION"]}',
                     artists = [a['ART_NAME'] for a in i['ARTISTS']],
+                    year = year,
                     explicit = i['EXPLICIT_LYRICS'] == '1',
                     duration = int(i['DURATION']) if i.get('DURATION') else None,
                     image_url = cover_url,
                     preview_url = preview_url,
                     additional = [i["ALB_TITLE"]]
                 ))
+
+            # Batch fetch missing years from album metadata
+            missing_year_tracks = [t for t in search_results if not t.year]
+            if missing_year_tracks:
+                album_ids = list(set(str(t_raw['ALB_ID']) for t_raw, t_res in zip(results, search_results) if not t_res.year and t_raw.get('ALB_ID')))
+                album_dates = {}
+                
+                def _fetch_album_date(aid):
+                    try:
+                        a_data = self.session.get_album_public(aid)
+                        if a_data and a_data.get('release_date'):
+                            return aid, str(a_data['release_date']).split('-')[0]
+                    except: pass
+                    return aid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for aid, y in executor.map(_fetch_album_date, album_ids):
+                        if y: album_dates[aid] = y
+                
+                for t_raw, t_res in zip(results, search_results):
+                    if not t_res.year and str(t_raw.get('ALB_ID')) in album_dates:
+                        t_res.year = album_dates[str(t_raw.get('ALB_ID'))]
+            
             return search_results
         elif query_type is DownloadTypeEnum.album:
             search_results = []
@@ -646,6 +803,33 @@ class ModuleInterface:
                     image_url = cover_url,
                     additional = [f"1 track" if i['NUMBER_TRACK'] == 1 else f"{i['NUMBER_TRACK']} tracks"]
                 ))
+            
+            # Batch fetch missing durations/years for albums
+            missing_metadata = [t for t in search_results if not t.duration or not t.year]
+            if missing_metadata:
+                a_meta = {}
+                def _fetch_dz_album_meta_internal(aid):
+                    try:
+                        a_data = self.session.get_album_public(aid)
+                        if a_data:
+                            return aid, {
+                                'dur': a_data.get('duration'),
+                                'year': str(a_data.get('release_date', ''))[:4] or None
+                            }
+                    except: pass
+                    return aid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for aid, meta in executor.map(_fetch_dz_album_meta_internal, [t.result_id for t in missing_metadata]):
+                        if meta: a_meta[aid] = meta
+                
+                for t in missing_metadata:
+                    if t.result_id in a_meta:
+                        if not t.duration:
+                            t.duration = a_meta[t.result_id]['dur']
+                        if not t.year:
+                            t.year = a_meta[t.result_id]['year']
+
             return search_results
         elif query_type is DownloadTypeEnum.artist:
             search_results = []
@@ -687,12 +871,35 @@ class ModuleInterface:
                     except Exception:
                         pass
                 search_results.append(SearchResult(
-                    result_id = i['PLAYLIST_ID'],
+                    result_id = str(i.get('PLAYLIST_ID') or i.get('id', '')),
                     name = i['TITLE'],
                     artists = [i['PARENT_USERNAME']],
+                    year = i['DATE_ADD'].split('-')[0] if i.get('DATE_ADD') else None,
                     image_url = cover_url,
-                    additional = [f"1 track" if i['NB_SONG'] == 1 else f"{i['NB_SONG']} tracks"]
+                    additional = [f"1 track" if i['NB_SONG'] == 1 else f"{i['NB_SONG']} tracks"],
+                    duration = i.get('DURATION')
                 ))
+
+            # Batch fetch missing durations for authenticated playlist search
+            missing_durations = [t for t in search_results if not t.duration]
+            if missing_durations:
+                p_durs = {}
+                def _fetch_dz_playlist_duration_auth(pid):
+                    try:
+                        p_data = self.session.get_playlist_public(pid)
+                        if p_data and p_data.get('duration'):
+                            return pid, p_data['duration']
+                    except: pass
+                    return pid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for pid, dur in executor.map(_fetch_dz_playlist_duration_auth, [t.result_id for t in missing_durations]):
+                        if dur: p_durs[pid] = dur
+                
+                for t in missing_durations:
+                    if t.result_id in p_durs:
+                        t.duration = p_durs[t.result_id]
+
             return search_results
 
     def _search_public(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo, limit: int):
@@ -744,16 +951,57 @@ class ModuleInterface:
                 if not preview_url and isinstance(i.get('preview'), str):
                     preview_url = i['preview']
                 album_title = (i.get('ALB_TITLE') or (i.get('album') or {}).get('title', ''))
+                
+                year = None
+                if i.get('PHYSICAL_RELEASE_DATE'):
+                    year = str(i['PHYSICAL_RELEASE_DATE']).split('-')[0]
+                elif i.get('album') and isinstance(i['album'], dict) and i['album'].get('release_date'):
+                    year = str(i['album']['release_date']).split('-')[0]
+                elif tid in public_data:
+                    release = public_data[tid].get('PHYSICAL_RELEASE_DATE') or public_data[tid].get('release_date') or (public_data[tid].get('album') or {}).get('release_date')
+                    if release:
+                        year = str(release).split('-')[0]
+
+                duration_sec = i.get('duration')
+                if duration_sec is not None:
+                    duration_sec = int(duration_sec)
+                
                 out.append(SearchResult(
                     result_id=tid,
-                    name=title,
-                    artists=artists,
-                    explicit=explicit,
-                    duration=duration,
+                    name=i.get('title') if not i.get('title_version') else f'{i["title"]} {i["title_version"]}',
+                    artists=[(i.get('artist') or {}).get('name', 'Unknown Artist')],
+                    year=year,
+                    explicit=bool(i.get('explicit_lyrics', False)),
+                    duration=duration_sec,
                     image_url=cover_url,
-                    preview_url=preview_url,
-                    additional=[album_title] if album_title else None,
+                    preview_url=(i.get('preview') or '').strip() or None,
+                    additional=[album_title] if album_title else []
                 ))
+
+            # Batch fetch missing years
+            missing_year_tracks = [t for t in out if not t.year]
+            if missing_year_tracks:
+                album_ids = list(set(str(t_raw.get('album', {}).get('id', '')) for t_raw, t_res in zip(data, out) if not t_res.year and isinstance(t_raw.get('album'), dict) and t_raw.get('album').get('id')))
+                album_ids = [aid for aid in album_ids if aid]
+                album_dates = {}
+                
+                def _fetch_album_date(aid):
+                    try:
+                        a_data = self.session.get_album_public(aid)
+                        if a_data and a_data.get('release_date'):
+                            return aid, str(a_data['release_date']).split('-')[0]
+                    except: pass
+                    return aid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for aid, y in executor.map(_fetch_album_date, album_ids):
+                        if y: album_dates[aid] = y
+                
+                for t_raw, t_res in zip(data, out):
+                    aid = str(t_raw.get('album', {}).get('id', ''))
+                    if not t_res.year and aid in album_dates:
+                        t_res.year = album_dates[aid]
+
             return out
 
         if query_type is DownloadTypeEnum.album:
@@ -767,6 +1015,33 @@ class ModuleInterface:
                 cover = i.get('cover_medium') or i.get('cover_small') or (self.get_image_url(i['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, 56, 80) if i.get('ALB_PICTURE') else None)
                 nb = i.get('NUMBER_TRACK') or i.get('nb_tracks', 0)
                 out.append(SearchResult(result_id=str(i.get('id', '')), name=name, artists=[artist], year=year, explicit=explicit, image_url=cover, additional=[f"1 track" if nb == 1 else f"{nb} tracks"]))
+            
+            # Batch fetch missing durations/years for albums
+            missing_metadata = [t for t in out if not t.duration or not t.year]
+            if missing_metadata:
+                a_meta = {}
+                def _fetch_dz_album_meta_public(aid):
+                    try:
+                        a_data = self.session.get_album_public(aid)
+                        if a_data:
+                            return aid, {
+                                'dur': a_data.get('duration'),
+                                'year': str(a_data.get('release_date', ''))[:4] or None
+                            }
+                    except: pass
+                    return aid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for aid, meta in executor.map(_fetch_dz_album_meta_public, [t.result_id for t in missing_metadata]):
+                        if meta: a_meta[aid] = meta
+                
+                for t in missing_metadata:
+                    if t.result_id in a_meta:
+                        if not t.duration:
+                            t.duration = int(a_meta[t.result_id]['dur']) if a_meta[t.result_id]['dur'] is not None else None
+                        if not t.year:
+                            t.year = a_meta[t.result_id]['year']
+
             return out
 
         if query_type is DownloadTypeEnum.artist:
@@ -781,16 +1056,51 @@ class ModuleInterface:
             ]
 
         if query_type is DownloadTypeEnum.playlist:
-            return [
-                SearchResult(
-                    result_id=str(i.get('id', '')),
-                    name=i.get('TITLE') or i.get('title', ''),
-                    artists=[(i.get('PARENT_USERNAME') or (i.get('user') or {}).get('name', ''))],
-                    image_url=(i.get('PLAYLIST_PICTURE') or i.get('picture_medium') or i.get('picture_small') or '').strip() or None,
-                    additional=[f"1 track" if (i.get('NB_SONG') or i.get('nb_tracks', 0)) == 1 else f"{i.get('NB_SONG') or i.get('nb_tracks', 0)} tracks"],
-                )
-                for i in data
-            ]
+            out = []
+            for i in data:
+                name = i.get('TITLE') or i.get('title', '')
+                artists = [(i.get('PARENT_USERNAME') or (i.get('user') or {}).get('name', ''))]
+                year = str(i.get('creation_date') or i.get('DATE_ADD') or '')[:4] or None
+                image_url = (i.get('PLAYLIST_PICTURE') or i.get('picture_medium') or i.get('picture_small') or '').strip() or None
+                nb = i.get('NB_SONG') or i.get('nb_tracks', 0)
+                additional = [f"1 track" if nb == 1 else f"{nb} tracks"]
+                
+                # Try to get duration from initial search results if available
+                duration = i.get('DURATION') or i.get('duration')
+                if duration is not None:
+                    duration = str(duration)
+                
+                out.append(SearchResult(
+                    result_id=str(i.get('id') or i.get('PLAYLIST_ID', '')),
+                    name=name,
+                    artists=artists,
+                    year=year,
+                    image_url=image_url,
+                    additional=additional,
+                    duration=duration
+                ))
+
+            # Batch fetch missing durations for playlists
+            missing_durations = [t for t in out if not t.duration]
+            if missing_durations:
+                p_durs = {}
+                def _fetch_dz_playlist_duration(pid):
+                    try:
+                        p_data = self.session.get_playlist_public(pid)
+                        if p_data and p_data.get('duration'):
+                            return pid, p_data['duration']
+                    except: pass
+                    return pid, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    for pid, dur in executor.map(_fetch_dz_playlist_duration, [t.result_id for t in missing_durations]):
+                        if dur: p_durs[pid] = dur
+                
+                for t in missing_durations:
+                    if t.result_id in p_durs:
+                        t.duration = p_durs[t.result_id]
+
+            return out
 
         return []
 
