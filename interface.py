@@ -235,6 +235,7 @@ class ModuleInterface:
             except (TypeError, ValueError):
                 pass
         return TrackInfo(
+            id = str(track_id),
             name = t_data['SNG_TITLE'] if not t_data.get('VERSION') else f'{t_data["SNG_TITLE"]} {t_data["VERSION"]}',
             album_id = t_data['ALB_ID'],
             album = t_data['ALB_TITLE'],
@@ -287,6 +288,7 @@ class ModuleInterface:
             duration_sec = int(duration_sec)
         preview_url = (t.get('preview') or '').strip() or None
         return TrackInfo(
+            id=str(track_id),
             name=title,
             album_id=str(album.get('id', '')),
             album=album.get('title', ''),
@@ -355,6 +357,7 @@ class ModuleInterface:
 
         # Deezer album SONGS have reduced schema (no TRACK_TOKEN, etc.); get_track_info needs full pageTrack data, so do not pass track data here
         return AlbumInfo(
+            id = str(album_id),
             name = a_data['ALB_TITLE'],
             artist = a_data['ART_NAME'],
             tracks = [track['SNG_ID'] for track in tracks_data],
@@ -388,6 +391,7 @@ class ModuleInterface:
             'release_date': release_date,
         }
         return AlbumInfo(
+            id=str(album_id),
             name=raw.get('title', ''),
             artist=artist_name,
             tracks=track_ids,
@@ -423,6 +427,7 @@ class ModuleInterface:
         release_year = int(creation[:4]) if creation and len(str(creation)) >= 4 else 0
         cover_url = (raw.get('picture_xl') or raw.get('picture_big') or raw.get('picture_medium') or '').strip() or None
         return PlaylistInfo(
+            id=str(playlist_id),
             name=raw.get('title', ''),
             creator=creator,
             tracks=track_ids,
@@ -461,6 +466,7 @@ class ModuleInterface:
                 user_upped_dict[t['SNG_ID']] = t
 
         return PlaylistInfo(
+            id = str(playlist_id),
             name = p_data['TITLE'],
             creator = p_data['PARENT_USERNAME'],
             tracks = [t['SNG_ID'] for t in songs],
