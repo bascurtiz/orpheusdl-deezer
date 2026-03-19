@@ -101,11 +101,7 @@ class ModuleInterface:
             self.login(email, password)
             return
         
-        error_msg = (
-            'Deezer credentials are missing in settings.json. '
-            'Please fill in either email and password, or arl. '
-            'Use the OrpheusDL GUI Settings tab (Deezer) or edit config/settings.json directly.'
-        )
+        error_msg = 'Deezer credentials are required for downloading. Please fill in either email and password, or arl in the settings.'
         raise self.exception(error_msg)
 
     def login(self, email: str, password: str):
@@ -117,8 +113,7 @@ class ModuleInterface:
             return True
         if not (email and password):
             raise self.exception(
-                'Deezer credentials are required. Please fill in your email and password in the settings. '
-                'Alternatively, you can use ARL instead.'
+                'Deezer credentials are required for downloading. Please fill in either email and password, or arl in the settings.'
             )
         arl, _ = self.session.login_via_email(email, password)
         self.tsc.set('arl', arl)
@@ -308,11 +303,7 @@ class ModuleInterface:
             cover_extra_kwargs={},
             credits_extra_kwargs={},
             lyrics_extra_kwargs={},
-            error=(
-                'Deezer credentials are missing in settings.json. '
-                'Please fill in either email and password, or arl. '
-                'Use the OrpheusDL GUI Settings tab (Deezer) or edit config/settings.json directly.'
-            ),
+            error='Deezer credentials are required for downloading. Please fill in either email and password, or arl in the settings.',
         )
 
     def get_track_download(self, id, track_token, track_token_expiry, format):
