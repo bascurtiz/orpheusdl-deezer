@@ -166,10 +166,47 @@ class ModuleInterface:
             disc_number = t_data.get('DISK_NUMBER'),
             replay_gain = t_data.get('GAIN'),
             release_date = t_data.get('PHYSICAL_RELEASE_DATE'),
+            track_url = f"https://www.deezer.com/track/{track_id}",
         )
 
         for key in alb_tags:
             setattr(tags, key, alb_tags[key])
+
+        # Ensure label, upc, and genre info is present even for single track downloads
+        if (not tags.label or not tags.upc or not tags.genres) and t_data.get('ALB_ID'):
+            try:
+                album_data = self.session.get_album(t_data['ALB_ID'])
+                if album_data and 'DATA' in album_data:
+                    if not tags.label:
+                        tags.label = album_data['DATA'].get('LABEL_NAME')
+                    if not tags.upc:
+                        tags.upc = album_data['DATA'].get('UPC')
+                    if not tags.genres and 'GENRES' in album_data['DATA'] and 'data' in album_data['DATA']['GENRES']:
+                        tags.genres = [g['GENRE_NAME'] for g in album_data['DATA']['GENRES']['data'] if g.get('GENRE_NAME')]
+            except:
+                pass
+
+        # Ensure album_artist is set even for single track downloads (triggers credit filter)
+        if not tags.album_artist:
+            tags.album_artist = t_data.get('ART_NAME')
+
+        # Extract genres from track data if not already provided by album tags
+        if not tags.genres and 'GENRES' in t_data and 'data' in t_data['GENRES']:
+            tags.genres = [g['GENRE_NAME'] for g in t_data['GENRES']['data'] if g.get('GENRE_NAME')]
+
+        # Robust fallback: check public API for genres if still missing (common for single tracks)
+        if not tags.genres:
+            try:
+                public_track = self.session.get_track_public(track_id)
+                if public_track and 'album' in public_track:
+                    public_album = self.session.get_album_public(public_track['album']['id'])
+                    if public_album and 'genres' in public_album and 'data' in public_album['genres']:
+                        tags.genres = [g['name'] for g in public_album['genres']['data'] if g.get('name')]
+            except:
+                pass
+        
+        # Explicitly suppress the automated UPC_DISC_TRACK comment string
+        tags.comment = None
 
         error = None
         if is_user_upped:
@@ -269,9 +306,15 @@ class ModuleInterface:
             disc_number=t.get('disk_number'),
             replay_gain=None,
             release_date=release_date,
+            track_url=f"https://www.deezer.com/track/{track_id}",
         )
         for key in alb_tags:
             setattr(tags, key, alb_tags[key])
+        
+        # Extract genres from track data if not already provided by album tags
+        if not tags.genres and 'genres' in t and 'data' in t['genres']:
+            tags.genres = [g['name'] for g in t['genres']['data'] if g.get('name')]
+
         title = t.get('title') or t.get('title_short', '')
         if t.get('title_version'):
             title = f"{title} {t['title_version']}"
@@ -337,13 +380,18 @@ class ModuleInterface:
             total_tracks = 0
             total_discs = 0
 
+        album_artist = a_data['ART_NAME']
+
+        genres = [g['GENRE_NAME'] for g in a_data['GENRES']['data'] if g.get('GENRE_NAME')] if 'GENRES' in a_data and 'data' in a_data['GENRES'] else []
+
         alb_tags = {
             'total_tracks': total_tracks,
             'total_discs': total_discs,
             'upc': a_data['UPC'],
             'label': a_data['LABEL_NAME'],
-            'album_artist': a_data['ART_NAME'],
-            'release_date': a_data.get('ORIGINAL_RELEASE_DATE') or a_data['PHYSICAL_RELEASE_DATE']
+            'album_artist': album_artist,
+            'release_date': a_data.get('ORIGINAL_RELEASE_DATE') or a_data['PHYSICAL_RELEASE_DATE'],
+            'genres': genres
         }
 
         # Deezer album SONGS have reduced schema (no TRACK_TOKEN, etc.); get_track_info needs full pageTrack data, so do not pass track data here
@@ -373,6 +421,10 @@ class ModuleInterface:
         artist = raw.get('artist') or {}
         artist_name = artist.get('name', '') if isinstance(artist, dict) else ''
         cover_url = (raw.get('cover_big') or raw.get('cover_medium') or raw.get('cover_xl') or '').strip() or None
+        # Public API
+
+        genres = [g['name'] for g in raw['genres']['data'] if g.get('name')] if 'genres' in raw and 'data' in raw['genres'] else []
+
         alb_tags = {
             'total_tracks': len(track_ids),
             'total_discs': 1,
@@ -380,6 +432,7 @@ class ModuleInterface:
             'label': '',
             'album_artist': artist_name,
             'release_date': release_date,
+            'genres': genres,
         }
         return AlbumInfo(
             id=str(album_id),
