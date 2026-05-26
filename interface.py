@@ -395,6 +395,12 @@ class ModuleInterface:
         }
 
         # Deezer album SONGS have reduced schema (no TRACK_TOKEN, etc.); get_track_info needs full pageTrack data, so do not pass track data here
+        expected_track_count = total_tracks
+        if a_data.get('NUMBER_TRACK') is not None:
+            try:
+                expected_track_count = int(a_data['NUMBER_TRACK'])
+            except (TypeError, ValueError):
+                pass
         return AlbumInfo(
             id = str(album_id),
             name = a_data['ALB_TITLE'],
@@ -406,7 +412,8 @@ class ModuleInterface:
             cover_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, cover_type, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
             cover_type = cover_type,
             all_track_cover_jpg_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
-            track_extra_kwargs = {'alb_tags': alb_tags},
+            track_extra_kwargs = {'alb_tags': alb_tags, 'data': {str(t['SNG_ID']): t for t in tracks_data}},
+            expected_track_count = expected_track_count or None,
         )
 
     def _get_album_info_public(self, album_id: str) -> Optional[AlbumInfo]:
