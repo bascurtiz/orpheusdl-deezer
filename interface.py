@@ -146,12 +146,21 @@ class ModuleInterface:
         format = self.quality_parse[quality_tier] if not is_user_upped else 'MP3_MISC'
 
         track = None
-        if data and track_id in data:
-            track = data[track_id]
-        elif not is_user_upped:
-            track = self.session.get_track(track_id)
-        else:   # user-upped tracks can't be requested with deezer.pageTrack
-            track = self.session.get_track_data(track_id)
+        cached = None
+        if data:
+            cached = data.get(track_id) or data.get(str(track_id))
+        if cached is not None:
+            # Album/playlist SONGS entries are a flat schema (no DATA, often no TRACK_TOKEN).
+            # Only use cache when it is a full pageTrack payload.
+            if not is_user_upped and isinstance(cached, dict) and 'DATA' in cached:
+                track = cached
+            elif is_user_upped:
+                track = cached
+        if track is None:
+            if not is_user_upped:
+                track = self.session.get_track(track_id)
+            else:   # user-upped tracks can't be requested with deezer.pageTrack
+                track = self.session.get_track_data(track_id)
 
         t_data = track
         if not is_user_upped:
@@ -412,7 +421,7 @@ class ModuleInterface:
             cover_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, cover_type, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
             cover_type = cover_type,
             all_track_cover_jpg_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
-            track_extra_kwargs = {'alb_tags': alb_tags, 'data': {str(t['SNG_ID']): t for t in tracks_data}},
+            track_extra_kwargs = {'alb_tags': alb_tags},
             expected_track_count = expected_track_count or None,
         )
 
