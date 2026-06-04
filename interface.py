@@ -410,6 +410,7 @@ class ModuleInterface:
                 expected_track_count = int(a_data['NUMBER_TRACK'])
             except (TypeError, ValueError):
                 pass
+        songs_prefetch = {str(t['SNG_ID']): t for t in tracks_data}
         return AlbumInfo(
             id = str(album_id),
             name = a_data['ALB_TITLE'],
@@ -421,7 +422,7 @@ class ModuleInterface:
             cover_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, cover_type, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
             cover_type = cover_type,
             all_track_cover_jpg_url = self.get_image_url(a_data['ALB_PICTURE'], ImageType.cover, ImageFileTypeEnum.jpg, self.default_cover.resolution, self.compression_nums[self.default_cover.compression]),
-            track_extra_kwargs = {'alb_tags': alb_tags},
+            track_extra_kwargs = {'alb_tags': alb_tags, 'data': songs_prefetch},
             expected_track_count = expected_track_count or None,
         )
 
@@ -519,11 +520,8 @@ class ModuleInterface:
         # placeholder images can't be requested as pngs
         cover_type = self.default_cover.file_type if p_pic else ImageFileTypeEnum.jpg
 
-        # Only user-uploaded tracks (SNG_ID < 0) go in data; they can't be fetched via pageTrack. Normal tracks need full pageTrack data from API.
-        user_upped_dict = {}
-        for t in songs:
-            if int(t['SNG_ID']) < 0:
-                user_upped_dict[t['SNG_ID']] = t
+        # Prefetch SONGS rows for GUI expand (title/duration); user-upped tracks still need full row in data.
+        prefetched = {str(t['SNG_ID']): t for t in songs}
 
         return PlaylistInfo(
             id = str(playlist_id),
@@ -535,7 +533,7 @@ class ModuleInterface:
             cover_url = cover_url,
             cover_type = cover_type,
             description = p_data['DESCRIPTION'],
-            track_extra_kwargs = {'data': user_upped_dict}
+            track_extra_kwargs = {'data': prefetched}
         )
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, artist_name = None) -> ArtistInfo:
